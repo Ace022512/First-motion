@@ -15,4 +15,6 @@ python3 build/render.py               # full render (video + audio + srt)
 python3 build/render.py --audio-only  # re-mix the audio only, keeping the video
 python3 build/render.py --still 3.0 12.5   # preview frames
 ```
-Edit the narration and caption text in `build/script.json`, and the gym sound level with `GYM_LEVEL` in `build/render.py`.
+Edit the narration and caption text in `build/script.json`.
+
+

@@ -385,13 +385,33 @@ def frame(t):
 
 # ---------------------------------------------------------------- audio / srt / encode
 LOUDNORM = "loudnorm=I=-14:TP=-1.5:LRA=11"  # social-media loudness
-GYM_LEVEL = 0.42  # gym bed level relative to voice peak (after ducking)
+USE_GYM_SOUNDS = False  # synthesized gym bed (build/sfx.py); off by default
+GYM_LEVEL = 0.42        # gym bed level relative to voice peak (after ducking)
+# Optional music bed: drop a song you have the rights to at build/audio/music.(mp3|wav|m4a)
+MUSIC_LEVEL = 0.30      # music level relative to voice peak, before ducking
+MUSIC_START = 0.0       # seconds into the song to start from (e.g. skip an intro)
+
+
+def find_music():
+    for ext in ("mp3", "wav", "m4a", "aac", "flac", "ogg"):
+        f = f"{ROOT}/build/audio/music.{ext}"
+        if os.path.exists(f):
+            return f
+    return None
+
+
+def load_stereo(path, sr, start, n):
+    raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-ss", str(start), "-i", path, "-t", str(n / sr + 0.1),
+                          "-ac", "2", "-ar", str(sr), "-f", "f32le", "-"], capture_output=True, check=True).stdout
+    m = np.frombuffer(raw, np.float32).reshape(-1, 2)[:n]
+    out = np.zeros((n, 2), np.float32); out[:len(m)] = m
+    return out / max(1e-6, np.abs(out).max())
 
 
 def build_audio(path):
     import soundfile as sf
     sys.path.insert(0, f"{ROOT}/build")
-    from sfx import SR, gym_bed
+    from sfx import SR, duck_curve, gym_bed
     voice = np.zeros(int(TOTAL * 24000), np.float32)
     for i, s in enumerate(starts):
         a, r = sf.read(f"{ROOT}/build/audio/l{i:02d}.wav", dtype="float32")
@@ -403,8 +423,13 @@ def build_audio(path):
     n2 = len(voice) * 2
     voice = np.fft.irfft(np.concatenate([V, np.zeros(n2 // 2 + 1 - len(V))]), n2) * 2
     voice /= np.abs(voice).max()
-    bed = gym_bed(TOTAL, voice, starts)
-    mix = voice * 0.85 + bed * GYM_LEVEL
+    mix = np.repeat((voice * 0.85)[:, None], 2, axis=1)
+    if USE_GYM_SOUNDS:
+        mix += (gym_bed(TOTAL, voice, starts) * GYM_LEVEL)[:, None]
+    music = find_music()
+    if music:
+        print("mixing music:", os.path.basename(music))
+        mix += load_stereo(music, SR, MUSIC_START, len(voice)) * (duck_curve(voice, TOTAL, 0.55) * MUSIC_LEVEL)[:, None]
     mix /= max(1.0, np.abs(mix).max() / 0.95)
     sf.write(path, mix.astype(np.float32), SR)
 

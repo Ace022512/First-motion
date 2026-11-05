@@ -117,17 +117,18 @@ def gym_bed(total, voice, starts, seed=7, sr=SR):
     bed += room
     bed /= np.abs(bed).max()
 
-    # Sidechain duck under the voice (smoothed envelope, ~10 dB of reduction)
-    env = np.abs(voice)
+    return bed * duck_curve(voice, total, 0.6)
+
+
+def duck_curve(voice, total, depth, sr=SR):
+    """Gain curve that dips by `depth` while the voice is speaking, plus picture fade in/out."""
+    n = int(total * sr)
+    env = np.abs(voice[:n])
     win = int(0.12 * sr)
     env = np.convolve(env, np.ones(win) / win, mode="same")
     env = np.clip(env / (env.max() * 0.25), 0, 1)
-    # slow release
-    rel = int(0.35 * sr)
-    env = np.convolve(env, np.ones(rel) / rel, mode="same")
-    env = np.clip(env * 2, 0, 1)
-    duck = 1 - 0.6 * env
-    # fade in/out with the picture
+    rel = int(0.35 * sr)  # slow release
+    env = np.clip(np.convolve(env, np.ones(rel) / rel, mode="same") * 2, 0, 1)
     tt = np.arange(n) / sr
     fade = np.clip(tt / 0.4, 0, 1) * np.clip((total - tt) / 1.0, 0, 1)
-    return bed * duck * fade
+    return (1 - depth * env) * fade
