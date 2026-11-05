@@ -384,17 +384,29 @@ def frame(t):
 
 
 # ---------------------------------------------------------------- audio / srt / encode
+LOUDNORM = "loudnorm=I=-14:TP=-1.5:LRA=11"  # social-media loudness
+GYM_LEVEL = 0.42  # gym bed level relative to voice peak (after ducking)
+
+
 def build_audio(path):
-    sr = 24000
-    track = np.zeros(int(TOTAL * sr), np.float32)
     import soundfile as sf
+    sys.path.insert(0, f"{ROOT}/build")
+    from sfx import SR, gym_bed
+    voice = np.zeros(int(TOTAL * 24000), np.float32)
     for i, s in enumerate(starts):
         a, r = sf.read(f"{ROOT}/build/audio/l{i:02d}.wav", dtype="float32")
-        assert r == sr
-        k = int(s * sr)
-        track[k:k + len(a)] += a[: len(track) - k]
-    track /= max(1e-6, np.abs(track).max()) / 0.89
-    sf.write(path, track, sr)
+        assert r == 24000
+        k = int(s * r)
+        voice[k:k + len(a)] += a[: len(voice) - k]
+    # upsample voice 24k -> 48k (FFT zero-pad)
+    V = np.fft.rfft(voice)
+    n2 = len(voice) * 2
+    voice = np.fft.irfft(np.concatenate([V, np.zeros(n2 // 2 + 1 - len(V))]), n2) * 2
+    voice /= np.abs(voice).max()
+    bed = gym_bed(TOTAL, voice, starts)
+    mix = voice * 0.85 + bed * GYM_LEVEL
+    mix /= max(1.0, np.abs(mix).max() / 0.95)
+    sf.write(path, mix.astype(np.float32), SR)
 
 
 def srt_time(x):
@@ -418,9 +430,17 @@ def main():
     build_audio(wav)
     build_srt(f"{ROOT}/out/ballers_bridge_30s.srt")
     out = f"{ROOT}/out/ballers_bridge_30s.mp4"
+    if "--audio-only" in sys.argv:  # swap the soundtrack on the existing render, no re-encode of video
+        tmp = out.replace(".mp4", ".tmp.mp4")
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", out, "-i", wav, "-map", "0:v", "-map", "1:a",
+                        "-c:v", "copy", "-af", LOUDNORM, "-ar", "48000", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-shortest", tmp],
+                       check=True)
+        os.replace(tmp, out)
+        print("remuxed", out)
+        return
     cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
            "-r", str(FPS), "-i", "-", "-i", wav, "-c:v", "libx264", "-preset", "medium", "-crf", "19",
-           "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-shortest", out]
+           "-pix_fmt", "yuv420p", "-af", LOUDNORM, "-ar", "48000", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-shortest", out]
     p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     n = int(TOTAL * FPS)
     for i in range(n):
